@@ -60,11 +60,44 @@ export default async function handler(req, res) {
         return res.status(200).send('OK');
       }
 
-      // Facebook structure
-      if (body?.entry?.[0]?.messaging?.[0]?.message) {
-        console.log('✅ Facebook message received');
-        return res.status(200).send('OK'); // You can add DB insert later
-      }
+    // Facebook structure
+if (body?.entry?.[0]?.messaging?.[0]?.message) {
+  const messageEvent = body.entry[0].messaging[0];
+  const userId = messageEvent.sender.id;
+  const messageText = messageEvent.message.text;
+  const messageId = messageEvent.message.mid;
+  const timestamp = new Date(messageEvent.timestamp);
+
+  const connection = await mysql.createConnection({
+    host: process.env.MYSQL_HOST,
+    user: process.env.MYSQL_USER,
+    password: process.env.MYSQL_PASSWORD,
+    database: process.env.MYSQL_DATABASE,
+  });
+
+  await connection.execute(
+    `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
+     VALUES (?, ?)`,
+    [userId, 'facebook']
+  );
+
+  const [convoRows] = await connection.execute(
+    `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = ?`,
+    [userId, 'facebook']
+  );
+  const convoId = convoRows[0]?.ID;
+
+  await connection.execute(
+    `INSERT INTO BOT_MES_CONTENT 
+      (BM_ID, USERIDENT, CONTENT, CREATED_TIME) 
+     VALUES (?, ?, ?, ?)`,
+    [null, userId, messageText, timestamp]
+  );
+
+  await connection.end();
+  return res.status(200).send('OK');
+}
+
 
       return res.status(400).send('Unsupported payload');
     } catch (err) {
