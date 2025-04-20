@@ -2,6 +2,8 @@ import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
+  // ✅ Early response to prevent timeout
+  res.status(200).send('✅ Script started — running in background');
   const PAGE_ACCESS_TOKEN = process.env.FB_PAGE_TOKEN;
   const PAGE_ID = process.env.FB_PAGE_ID;
 
