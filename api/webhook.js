@@ -1,4 +1,4 @@
-// ✅ Unified LINE + Facebook Webhook (Schema-aligned with Facebook name/email lookup)
+// ✅ Unified LINE + Facebook Webhook (Schema-aligned with FB + LINE profile support)
 
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
@@ -39,6 +39,21 @@ export default async function handler(req, res) {
         const messageId = event.message.id;
         const timestamp = new Date(event.timestamp);
 
+        // 🔍 Lookup LINE user profile
+        let lineName = null;
+        try {
+          const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+            }
+          });
+          const profileData = await profileRes.json();
+          lineName = profileData.displayName || null;
+        } catch (err) {
+          console.warn('⚠️ LINE profile fetch failed:', err);
+        }
+
         await db.execute(
           `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
            VALUES (?, 'line')`,
@@ -64,7 +79,7 @@ export default async function handler(req, res) {
         await db.execute(
           `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [bmId, userId, null, null, messageText, null, timestamp]
+          [bmId, userId, lineName, null, messageText, null, timestamp]
         );
       }
 
