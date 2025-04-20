@@ -36,11 +36,16 @@ export default async function handler(req, res) {
         [userId, 'facebook']
       );
 
-      await db.execute(
-        `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, CONTENT, CREATED_TIME)
-         VALUES (?, ?, ?, ?)`,
-        [null, userId, text, new Date(timestamp)]
-      );
+   await db.execute(
+  `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, CONTENT, CREATED_TIME) VALUES (?, ?, ?, ?)`,
+  [
+    null,
+    userId || 'unknown',
+    text || '[empty]',
+    timestamp ? new Date(timestamp) : new Date()
+  ]
+);
+
     }
   }
 
