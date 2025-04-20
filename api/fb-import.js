@@ -41,10 +41,11 @@ const timestamp = msg.created_time || new Date().toISOString();
 
 
       await db.execute(
-        `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
-         VALUES (?, ?)`,
-        [userId, 'facebook']
-      );
+  `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
+   VALUES (?, ?)`,
+  [convoId, 'facebook']
+);
+
 
    await db.execute(
   `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, CONTENT, CREATED_TIME) VALUES (?, ?, ?, ?)`,
