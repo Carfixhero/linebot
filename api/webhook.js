@@ -1,3 +1,18 @@
+if (req.method === 'GET') {
+  const VERIFY_TOKEN = 'carfix123'; // use the exact token you typed
+
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('✅ Facebook webhook verified!');
+    return res.status(200).send(challenge);
+  } else {
+    return res.status(403).send('Verification failed');
+  }
+}
+
 import mysql from 'mysql2/promise';
 
 export default async function handler(req, res) {
