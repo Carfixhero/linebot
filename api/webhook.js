@@ -1,4 +1,4 @@
-// ✅ Unified LINE + Facebook Webhook with automatic Facebook recovery logic
+// ✅ Unified LINE + Facebook Webhook with debug for BOT_MESSAGES insert
 
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
@@ -81,12 +81,11 @@ export default async function handler(req, res) {
         );
       }
 
-      // ✅ Facebook recovery logic (automatic on any webhook trigger)
+      // ✅ Facebook recovery logic with debug
       if (body?.entry?.[0]?.messaging?.[0]?.sender?.id) {
         const msg = body.entry[0].messaging[0];
         const userId = msg.sender.id;
 
-        // Step 1: Fetch all conversations (or just the sender’s latest convo)
         const convoRes = await fetch(`https://graph.facebook.com/v18.0/${process.env.FB_PAGE_ID}/conversations?access_token=${process.env.FB_PAGE_TOKEN}`);
         const convoData = await convoRes.json();
         const conversations = convoData.data || [];
@@ -94,7 +93,6 @@ export default async function handler(req, res) {
         for (const convo of conversations) {
           const convoId = convo.id;
 
-          // Check if conversation already exists
           await db.execute(
             `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
              VALUES (?, 'facebook')`,
@@ -106,7 +104,11 @@ export default async function handler(req, res) {
             [convoId]
           );
 
-          // Step 2: Fetch all messages in the conversation
+          if (!bcId) {
+            console.warn(`❌ No conversation found for convoId: ${convoId}`);
+            continue;
+          }
+
           const msgRes = await fetch(`https://graph.facebook.com/v18.0/${convoId}/messages?access_token=${process.env.FB_PAGE_TOKEN}`);
           const msgData = await msgRes.json();
 
@@ -120,10 +122,10 @@ export default async function handler(req, res) {
 
             if (!text || typeof text !== 'string') continue;
 
-            // Check if message already exists
             const [existing] = await db.execute(`SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`, [messageId]);
             if (existing.length > 0) continue;
 
+            console.log(`💾 Inserting message: ${messageId}`);
             await db.execute(
               `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
                VALUES (?, 'in', ?, ?)`,
@@ -134,6 +136,11 @@ export default async function handler(req, res) {
               `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
               [messageId]
             );
+
+            if (!bmId) {
+              console.warn(`⚠️ BM_ID not found after insert: ${messageId}`);
+              continue;
+            }
 
             await db.execute(
               `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
