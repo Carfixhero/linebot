@@ -1,5 +1,7 @@
 {
+  "type": "module",
   "dependencies": {
-    "mysql2": "latest"
+    "mysql2": "latest",
+    "node-fetch": "2"
   }
 }
