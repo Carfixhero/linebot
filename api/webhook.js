@@ -1,28 +1,34 @@
+// ✅ Unified LINE + Facebook Webhook (Schema-aligned)
+
 import mysql from 'mysql2/promise';
 
 export default async function handler(req, res) {
-  const VERIFY_TOKEN = 'carfix123'; // match your Facebook token
+  const VERIFY_TOKEN = 'carfix123'; // Facebook webhook verification token
 
-  // ✅ Facebook GET webhook verification
   if (req.method === 'GET') {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-      console.log('✅ Facebook webhook verified!');
       return res.status(200).send(challenge);
     } else {
       return res.status(403).send('Verification failed');
     }
   }
 
-  // ✅ LINE + Facebook webhook POST handler
   if (req.method === 'POST') {
     try {
       const body = req.body;
 
-      // LINE structure
+      const db = await mysql.createConnection({
+        host: process.env.MYSQL_HOST,
+        user: process.env.MYSQL_USER,
+        password: process.env.MYSQL_PASSWORD,
+        database: process.env.MYSQL_DATABASE,
+      });
+
+      // ✅ LINE message handler
       if (body?.events?.[0]?.message) {
         const event = body.events[0];
         const userId = event.source.userId;
@@ -30,82 +36,79 @@ export default async function handler(req, res) {
         const messageId = event.message.id;
         const timestamp = new Date(event.timestamp);
 
-        const connection = await mysql.createConnection({
-          host: process.env.MYSQL_HOST,
-          user: process.env.MYSQL_USER,
-          password: process.env.MYSQL_PASSWORD,
-          database: process.env.MYSQL_DATABASE,
-        });
-
-        await connection.execute(
+        await db.execute(
           `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
-           VALUES (?, ?)`,
-          [userId, 'line']
+           VALUES (?, 'line')`,
+          [userId]
         );
 
-        const [convoRows] = await connection.execute(
-          `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = ?`,
-          [userId, 'line']
-        );
-        const convoId = convoRows[0]?.ID;
-
-        await connection.execute(
-          `INSERT INTO BOT_MES_CONTENT 
-            (BM_ID, USERIDENT, CONTENT, CREATED_TIME) 
-           VALUES (?, ?, ?, ?)`,
-          [null, userId, messageText, timestamp]
+        const [[{ ID: bcId } = {}]] = await db.execute(
+          `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
+          [userId]
         );
 
-        await connection.end();
-        return res.status(200).send('OK');
+        await db.execute(
+          `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
+           VALUES (?, 'in', ?, ?)`,
+          [bcId, messageId, timestamp]
+        );
+
+        const [[{ ID: bmId } = {}]] = await db.execute(
+          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+          [messageId]
+        );
+
+        await db.execute(
+          `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [bmId, userId, null, null, messageText, null, timestamp]
+        );
       }
 
-    // Facebook structure
-if (body?.entry?.[0]?.messaging?.[0]?.message) {
-  const messageEvent = body.entry[0].messaging[0];
-  const userId = messageEvent.sender.id;
-  const messageText = messageEvent.message.text;
-  const messageId = messageEvent.message.mid;
-  const timestamp = new Date(messageEvent.timestamp);
+      // ✅ Facebook message handler
+      if (body?.entry?.[0]?.messaging?.[0]?.message) {
+        const msg = body.entry[0].messaging[0];
+        const userId = msg.sender.id;
+        const messageText = msg.message.text;
+        const messageId = msg.message.mid;
+        const timestamp = new Date(msg.timestamp);
 
-  const connection = await mysql.createConnection({
-    host: process.env.MYSQL_HOST,
-    user: process.env.MYSQL_USER,
-    password: process.env.MYSQL_PASSWORD,
-    database: process.env.MYSQL_DATABASE,
-  });
+        await db.execute(
+          `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
+           VALUES (?, 'facebook')`,
+          [userId]
+        );
 
-  await connection.execute(
-    `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
-     VALUES (?, ?)`,
-    [userId, 'facebook']
-  );
+        const [[{ ID: bcId } = {}]] = await db.execute(
+          `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
+          [userId]
+        );
 
-  const [convoRows] = await connection.execute(
-    `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = ?`,
-    [userId, 'facebook']
-  );
-  const convoId = convoRows[0]?.ID;
+        await db.execute(
+          `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
+           VALUES (?, 'in', ?, ?)`,
+          [bcId, messageId, timestamp]
+        );
 
-  await connection.execute(
-    `INSERT INTO BOT_MES_CONTENT 
-      (BM_ID, USERIDENT, CONTENT, CREATED_TIME) 
-     VALUES (?, ?, ?, ?)`,
-    [null, userId, messageText, timestamp]
-  );
+        const [[{ ID: bmId } = {}]] = await db.execute(
+          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+          [messageId]
+        );
 
-  await connection.end();
-  return res.status(200).send('OK');
-}
+        await db.execute(
+          `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [bmId, userId, null, null, messageText, null, timestamp]
+        );
+      }
 
-
-      return res.status(400).send('Unsupported payload');
+      await db.end();
+      return res.status(200).send('OK');
     } catch (err) {
       console.error('❌ Webhook error:', err);
       return res.status(500).send('Internal error');
     }
   }
 
-  // ❌ Not GET or POST
-  res.status(405).send('Method Not Allowed');
+  return res.status(405).send('Method Not Allowed');
 }
