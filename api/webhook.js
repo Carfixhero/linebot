@@ -1,4 +1,4 @@
-// ✅ Unified LINE + Facebook Webhook (Schema-aligned with FB + LINE profile support)
+// ✅ Unified LINE + Facebook Webhook with automatic Facebook recovery logic
 
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         database: process.env.MYSQL_DATABASE,
       });
 
-      // ✅ LINE message handler
+      // ✅ LINE handler (unchanged)
       if (body?.events?.[0]?.message) {
         const event = body.events[0];
         const userId = event.source.userId;
@@ -39,17 +39,15 @@ export default async function handler(req, res) {
         const messageId = event.message.id;
         const timestamp = new Date(event.timestamp);
 
-        // 🔍 Lookup LINE user profile
         let lineName = null;
         try {
           const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
-            method: 'GET',
             headers: {
-              Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
-            }
+              Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+            },
           });
-          const profileData = await profileRes.json();
-          lineName = profileData.displayName || null;
+          const profile = await profileRes.json();
+          lineName = profile.displayName || null;
         } catch (err) {
           console.warn('⚠️ LINE profile fetch failed:', err);
         }
@@ -83,54 +81,67 @@ export default async function handler(req, res) {
         );
       }
 
-      // ✅ Facebook message handler
-      if (body?.entry?.[0]?.messaging?.[0]?.message) {
+      // ✅ Facebook recovery logic (automatic on any webhook trigger)
+      if (body?.entry?.[0]?.messaging?.[0]?.sender?.id) {
         const msg = body.entry[0].messaging[0];
         const userId = msg.sender.id;
-        const messageText = msg.message.text;
-        const messageId = msg.message.mid;
-        const timestamp = new Date(msg.timestamp);
 
-        // 🔍 Lookup sender name/email using Graph API (based on message ID)
-        let senderName = null;
-        let senderEmail = null;
+        // Step 1: Fetch all conversations (or just the sender’s latest convo)
+        const convoRes = await fetch(`https://graph.facebook.com/v18.0/${process.env.FB_PAGE_ID}/conversations?access_token=${process.env.FB_PAGE_TOKEN}`);
+        const convoData = await convoRes.json();
+        const conversations = convoData.data || [];
 
-        try {
-          const detailRes = await fetch(`https://graph.facebook.com/v18.0/${messageId}?fields=from&access_token=${process.env.FB_PAGE_TOKEN}`);
-          const detailData = await detailRes.json();
-          senderName = detailData.from?.name || null;
-          senderEmail = detailData.from?.email || null;
-        } catch (error) {
-          console.warn('⚠️ Failed to fetch FB sender name/email:', error);
+        for (const convo of conversations) {
+          const convoId = convo.id;
+
+          // Check if conversation already exists
+          await db.execute(
+            `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
+             VALUES (?, 'facebook')`,
+            [convoId]
+          );
+
+          const [[{ ID: bcId } = {}]] = await db.execute(
+            `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
+            [convoId]
+          );
+
+          // Step 2: Fetch all messages in the conversation
+          const msgRes = await fetch(`https://graph.facebook.com/v18.0/${convoId}/messages?access_token=${process.env.FB_PAGE_TOKEN}`);
+          const msgData = await msgRes.json();
+
+          for (const message of msgData.data || []) {
+            const messageId = message.id;
+            const text = message.message;
+            const timestamp = message.created_time;
+            const fromId = message.from?.id || null;
+            let senderName = message.from?.name || null;
+            let senderEmail = message.from?.email || null;
+
+            if (!text || typeof text !== 'string') continue;
+
+            // Check if message already exists
+            const [existing] = await db.execute(`SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`, [messageId]);
+            if (existing.length > 0) continue;
+
+            await db.execute(
+              `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
+               VALUES (?, 'in', ?, ?)`,
+              [bcId, messageId, new Date(timestamp)]
+            );
+
+            const [[{ ID: bmId } = {}]] = await db.execute(
+              `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+              [messageId]
+            );
+
+            await db.execute(
+              `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [bmId, fromId, senderName, senderEmail, text, null, new Date(timestamp)]
+            );
+          }
         }
-
-        await db.execute(
-          `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
-           VALUES (?, 'facebook')`,
-          [userId]
-        );
-
-        const [[{ ID: bcId } = {}]] = await db.execute(
-          `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
-          [userId]
-        );
-
-        await db.execute(
-          `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
-           VALUES (?, 'in', ?, ?)`,
-          [bcId, messageId, timestamp]
-        );
-
-        const [[{ ID: bmId } = {}]] = await db.execute(
-          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-          [messageId]
-        );
-
-        await db.execute(
-          `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [bmId, userId, senderName, senderEmail, messageText, null, timestamp]
-        );
       }
 
       await db.end();
