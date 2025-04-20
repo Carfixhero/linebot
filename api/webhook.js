@@ -20,17 +20,26 @@ export default async function handler(req, res) {
     database: process.env.MYSQL_DATABASE,
   });
 
+  // insert conversation if not exists
   await connection.execute(
-    'INSERT INTO BOT_MESSAGES (MESSAGE_ID, CREATED_TIME, DIRECTION, SOURCE) VALUES (?, ?, ?, ?)',
-    [messageId, timestamp, 'in', 'line']
+    `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
+     VALUES (?, ?)`,
+    [userId, 'line']
   );
 
-  const [rows] = await connection.execute('SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?', [messageId]);
-  const BM_ID = rows[0]?.ID;
+  // get convo ID
+  const [convoRows] = await connection.execute(
+    `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = ?`,
+    [userId, 'line']
+  );
+  const convoId = convoRows[0]?.ID;
 
+  // insert into content table
   await connection.execute(
-    'INSERT INTO BOT_MES_CONTENT (BM_ID, CONTENT, CREATED_TIME) VALUES (?, ?, ?)',
-    [BM_ID, messageText, timestamp]
+    `INSERT INTO BOT_MES_CONTENT 
+      (BM_ID, USERIDENT, CONTENT, CREATED_TIME) 
+     VALUES (?, ?, ?, ?)`,
+    [null, userId, messageText, timestamp]
   );
 
   await connection.end();
