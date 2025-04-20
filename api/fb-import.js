@@ -28,9 +28,17 @@ export default async function handler(req, res) {
 
     for (const msg of msgData.data || []) {
       const messageId = msg.id;
-      const text = msg.message;
-      const userId = msg.from?.id || null;
-      const timestamp = msg.created_time;
+      
+  const text = msg.message;
+
+if (!text || typeof text !== 'string') {
+  console.log(`⚠️ Skipping non-text message: ${msg.id}`);
+  continue;
+}
+
+const userId = msg.from?.id || 'unknown';
+const timestamp = msg.created_time || new Date().toISOString();
+
 
       await db.execute(
         `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
