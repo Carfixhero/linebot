@@ -1,9 +1,10 @@
-// ✅ Unified LINE + Facebook Webhook (Schema-aligned)
+// ✅ Unified LINE + Facebook Webhook (Schema-aligned with Facebook name/email lookup)
 
 import mysql from 'mysql2/promise';
+import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
-  const VERIFY_TOKEN = 'carfix123'; // Facebook webhook verification token
+  const VERIFY_TOKEN = 'carfix123';
 
   if (req.method === 'GET') {
     const mode = req.query['hub.mode'];
@@ -75,6 +76,19 @@ export default async function handler(req, res) {
         const messageId = msg.message.mid;
         const timestamp = new Date(msg.timestamp);
 
+        // 🔍 Lookup sender name/email using Graph API (based on message ID)
+        let senderName = null;
+        let senderEmail = null;
+
+        try {
+          const detailRes = await fetch(`https://graph.facebook.com/v18.0/${messageId}?fields=from&access_token=${process.env.FB_PAGE_TOKEN}`);
+          const detailData = await detailRes.json();
+          senderName = detailData.from?.name || null;
+          senderEmail = detailData.from?.email || null;
+        } catch (error) {
+          console.warn('⚠️ Failed to fetch FB sender name/email:', error);
+        }
+
         await db.execute(
           `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
            VALUES (?, 'facebook')`,
@@ -100,7 +114,7 @@ export default async function handler(req, res) {
         await db.execute(
           `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, EMAIL, CONTENT, TRANS_CONTENT, CREATED_TIME)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [bmId, userId, null, null, messageText, null, timestamp]
+          [bmId, userId, senderName, senderEmail, messageText, null, timestamp]
         );
       }
 
