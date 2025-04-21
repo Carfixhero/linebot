@@ -16,41 +16,39 @@ export default async function handler(req, res) {
     const convoRes = await fetch(`https://graph.facebook.com/v22.0/${PAGE_ID}/conversations?access_token=${ACCESS_TOKEN}`);
     const convoData = await convoRes.json();
 
-    // 🛑 Defensive check: is data array?
-    if (!Array.isArray(convoData.data)) {
+    if (!Array.isArray(convoData?.data)) {
+      console.warn('⚠️ No valid data received from Facebook');
       await db.end();
-      return res.status(500).json({ error: 'Invalid data from Facebook API', convoData });
+      return res.status(200).end(); // ✅ Silent clean exit
     }
 
     let inserted = 0;
 
     for (const convo of convoData.data) {
-      const convoId = convo?.id;
+      const convoId = typeof convo?.id === 'string' ? convo.id.trim() : null;
 
-      // 🛑 Skip if no valid ID
-      if (!convoId || typeof convoId !== 'string') {
-        console.warn(`❌ Skipping invalid conversation`, convo);
+      if (!convoId) {
+        console.warn('❌ Skipping invalid or empty convo:', convo);
         continue;
       }
 
-      await db.execute(
+      const [result] = await db.execute(
         `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
          VALUES (?, 'facebook')`,
         [convoId]
       );
 
-      inserted++;
+      if (result.affectedRows > 0) {
+        inserted++;
+      }
     }
 
     await db.end();
-
-   
+    return res.status(200).end(); // ✅ No output, clean finish
 
   } catch (err) {
-    console.error('❌ Error fetching or inserting:', err);
+    console.error('❌ Error syncing Facebook conversations:', err);
     await db.end();
-    return res.status(500).json({ error: 'Internal error', detail: err.message });
-     // ✅ Always return something
-    return res.status(200).json({ message: '✅ Sync complete', inserted });
+    return res.status(200).end(); // Still respond with 200 to avoid re-tries
   }
 }
