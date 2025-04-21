@@ -1,4 +1,3 @@
-// ✅ FINAL VERSION: Always fetch messages regardless of convo insert, with real error reporting
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
@@ -17,8 +16,8 @@ export default async function handler(req, res) {
     const convoRes = await fetch(`https://graph.facebook.com/v22.0/${PAGE_ID}/conversations?access_token=${ACCESS_TOKEN}`);
     const convoData = await convoRes.json();
 
-    const convoId = convo.id;
-
+    for (const convo of convoData.data) {
+      const convoId = convo.id;
 
       await db.execute(
         `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
@@ -29,40 +28,38 @@ export default async function handler(req, res) {
         `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
         [convoId]
       );
-      if (!bcId) continue;
 
       const msgRes = await fetch(`https://graph.facebook.com/v22.0/${convoId}/messages?access_token=${ACCESS_TOKEN}`);
       const msgData = await msgRes.json();
-      const messages = msgData.data || [];
+      const messages = msgData.data;
 
       for (const msg of messages) {
         const messageId = msg.id;
-        const text = msg.message;
         const created = new Date(msg.created_time);
-        const userId = msg.from?.id || null;
-        const name = msg.from?.name || null;
-
-        if (!text || typeof text !== 'string') continue;
-
-        const [exists] = await db.execute(`SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`, [messageId]);
-        if (exists.length > 0) continue;
 
         await db.execute(
-          `INSERT INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
+          `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
            VALUES (?, 'in', ?, ?)`,
           [bcId, messageId, created]
         );
+
+        const msgRes2 = await fetch(`https://graph.facebook.com/v22.0/${messageId}?fields=id,created_time,from,to,message&access_token=${ACCESS_TOKEN}`);
+        const msgData2 = await msgRes2.json();
+
+        const userId = msgData2.from?.id;
+        const name = msgData2.from?.name;
+        const text = msgData2.message;
+        const createdTime = new Date(msgData2.created_time);
 
         const [[{ ID: bmId } = {}]] = await db.execute(
           `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
           [messageId]
         );
-        if (!bmId) continue;
 
         await db.execute(
-          `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
+          `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
            VALUES (?, ?, ?, ?, ?)`,
-          [bmId, userId, name, text, created]
+          [bmId, userId, name, text, createdTime]
         );
       }
     }
