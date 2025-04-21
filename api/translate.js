@@ -6,7 +6,7 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
-  try {
+  
     const db = await mysql.createConnection({
       host: process.env.MYSQL_HOST,
       user: process.env.MYSQL_USER,
