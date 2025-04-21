@@ -24,13 +24,23 @@ export default async function handler(req, res) {
 
     const { ID, CONTENT } = rows[0];
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: 'Translate to ENGLISH. Only reply with the translation.' },
-        { role: 'user', content: CONTENT }
-      ]
-    });
+    const response = await openai.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [
+    {
+      role: 'system',
+      content: `You are a professional car parts translator. 
+If the message is in Thai, translate it to English. 
+If it's in English, translate it to Thai. 
+The message is always about car spare parts, repairs, or mechanics. 
+Only reply with the clean, natural translation — no explanation.`
+    },
+    {
+      role: 'user',
+      content: CONTENT
+    }
+  ]
+});
 
     const translated = completion.choices[0].message.content.trim();
 
