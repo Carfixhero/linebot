@@ -2,6 +2,7 @@
   "type": "module",
   "dependencies": {
     "mysql2": "latest",
-    "node-fetch": "2"
+    "node-fetch": "2",
+    "openai": "^4.0.0"
   }
 }
