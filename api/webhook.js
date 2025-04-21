@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
   const VERIFY_TOKEN = 'carfix123';
@@ -34,6 +35,14 @@ export default async function handler(req, res) {
         const messageId = event.message.id;
         const timestamp = new Date(event.timestamp);
 
+        const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+          headers: {
+            Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+          },
+        });
+        const profile = await profileRes.json();
+        const name = profile.displayName || null;
+
         await db.execute(
           `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
           [userId]
@@ -57,7 +66,7 @@ export default async function handler(req, res) {
         await db.execute(
           `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
            VALUES (?, ?, ?, ?, ?)`,
-          [bmId, userId, null, messageText, timestamp]
+          [bmId, userId, name, messageText, timestamp]
         );
       }
 
@@ -89,10 +98,14 @@ export default async function handler(req, res) {
           [messageId]
         );
 
+        const detailRes = await fetch(`https://graph.facebook.com/v22.0/${messageId}?fields=from&access_token=${process.env.FB_PAGE_TOKEN}`);
+        const detailData = await detailRes.json();
+        const name = detailData.from?.name || null;
+
         await db.execute(
           `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
            VALUES (?, ?, ?, ?, ?)`,
-          [bmId, userId, null, messageText, timestamp]
+          [bmId, userId, name, messageText, timestamp]
         );
       }
 
