@@ -17,14 +17,8 @@ export default async function handler(req, res) {
     const convoRes = await fetch(`https://graph.facebook.com/v22.0/${PAGE_ID}/conversations?access_token=${ACCESS_TOKEN}`);
     const convoData = await convoRes.json();
 
-    if (!Array.isArray(convoData?.data)) {
-      await db.end();
-      return res.status(200).end();
-    }
+    const convoId = convo.id;
 
-    for (const convo of convoData.data) {
-      const convoId = typeof convo?.id === 'string' ? convo.id.trim() : null;
-      if (!convoId) continue;
 
       await db.execute(
         `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
