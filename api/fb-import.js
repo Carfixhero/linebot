@@ -2,7 +2,6 @@ import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
-  res.status(200).send('✅ FB conversation insert started');
 
   const db = await mysql.createConnection({
     host: process.env.MYSQL_HOST,
