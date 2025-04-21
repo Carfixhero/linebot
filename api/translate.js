@@ -2,7 +2,7 @@ import mysql from 'mysql2/promise';
 import { OpenAI } from 'openai';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // Set this in your Vercel project settings
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export default async function handler(req, res) {
@@ -14,7 +14,6 @@ export default async function handler(req, res) {
       database: process.env.MYSQL_DATABASE,
     });
 
-    // Get one message to translate
     const [rows] = await db.execute(
       'SELECT ID, CONTENT FROM BOT_MES_CONTENT WHERE TRANS_CONTENT IS NULL AND CONTENT IS NOT NULL LIMIT 1'
     );
@@ -25,7 +24,7 @@ export default async function handler(req, res) {
 
     const { ID, CONTENT } = rows[0];
 
-    const result = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: 'Translate to ENGLISH. Only reply with the translation.' },
@@ -33,9 +32,8 @@ export default async function handler(req, res) {
       ]
     });
 
-    const translated = result.choices[0].message.content.trim();
+    const translated = completion.choices[0].message.content.trim();
 
-    // Update the DB with the translation
     await db.execute(
       'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
       [translated, ID]
@@ -47,8 +45,9 @@ export default async function handler(req, res) {
       original: CONTENT,
       translated,
     });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Translation failed' });
+    console.error('Translation error:', err);
+    res.status(500).json({ error: 'Translation failed', detail: err.message });
   }
 }
