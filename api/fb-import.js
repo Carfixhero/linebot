@@ -40,8 +40,8 @@ export default async function handler(req, res) {
     }
 
     await db.end();
-    console.log('✅ FB conversation insert complete');
+    
   } catch (err) {
-    console.error('❌ Conversation insert failed:', err);
+
   }
 }
