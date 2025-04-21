@@ -15,7 +15,7 @@ export default async function handler(req, res) {
     });
 
     const [rows] = await db.execute(
-      'SELECT ID, CONTENT FROM BOT_MES_CONTENT WHERE TRANS_CONTENT IS NULL AND CONTENT IS NOT NULL LIMIT 1'
+      'SELECT ID, CONTENT FROM BOT_MES_CONTENT WHERE TRANS_CONTENT IS NULL LIMIT 1'
     );
 
     if (rows.length === 0) {
@@ -24,25 +24,41 @@ export default async function handler(req, res) {
 
     const { ID, CONTENT } = rows[0];
 
-    const response = await openai.chat.completions.create({
-  model: 'gpt-4o',
-  messages: [
-    {
-      role: 'system',
-      content: `You are a professional car parts translator. 
-If the message is in Thai, translate it to English. 
-If it's in English, translate it to Thai. 
-The message is always about car spare parts, repairs, or mechanics. 
-Only reply with the clean, natural translation — no explanation.`
-    },
-    {
-      role: 'user',
-      content: CONTENT
+    if (!CONTENT || CONTENT.trim() === '') {
+      await db.execute(
+        'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
+        ['NA', ID]
+      );
+      return res.status(200).json({ skipped: true, reason: 'Empty content', id: ID });
     }
-  ]
-});
 
-    const translated = completion.choices[0].message.content.trim();
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a professional car parts translator.
+If the message is in Thai, translate it to English.
+If it's in English, translate it to Thai.
+The message is always about car spare parts, repairs, or mechanics.
+Only reply with the clean, natural translation — no explanation.`
+        },
+        {
+          role: 'user',
+          content: CONTENT
+        }
+      ]
+    });
+
+    const translated = response.choices?.[0]?.message?.content?.trim();
+
+    if (!translated) {
+      await db.execute(
+        'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
+        ['NA', ID]
+      );
+      return res.status(200).json({ skipped: true, reason: 'OpenAI gave empty', id: ID });
+    }
 
     await db.execute(
       'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
@@ -57,7 +73,19 @@ Only reply with the clean, natural translation — no explanation.`
     });
 
   } catch (err) {
-    console.error('Translation error:', err);
-    res.status(500).json({ error: 'Translation failed', detail: err.message });
+    console.error('❌ Translation failed:', err);
+    try {
+      const idMatch = /ID\s*=\s*(\d+)/.exec(err.message || '')?.[1];
+      if (idMatch) {
+        await db.execute(
+          'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
+          ['NA', idMatch]
+        );
+      }
+    } catch (ignore) {}
+    res.status(500).json({
+      error: 'Translation failed',
+      detail: err.message || 'Unknown error',
+    });
   }
 }
