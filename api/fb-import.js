@@ -1,4 +1,4 @@
-// ✅ Manual Insert: Fixed 10-message batch for known conversation
+// ✅ FINAL STRIPPED VERSION — Insert messages for 1 conversation, no logging
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
@@ -14,7 +14,6 @@ export default async function handler(req, res) {
   const PAGE_TOKEN = process.env.FB_PAGE_TOKEN;
 
   try {
-    // Insert conversation if needed
     await db.execute(
       `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
       [convoId]
@@ -24,10 +23,8 @@ export default async function handler(req, res) {
       `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
       [convoId]
     );
+    if (!bcId) return res.status(500).send('Missing BC_ID');
 
-    if (!bcId) throw new Error('❌ No BC_ID');
-
-    // Fetch messages
     const msgRes = await fetch(`https://graph.facebook.com/v22.0/${convoId}/messages?access_token=${PAGE_TOKEN}`);
     const msgData = await msgRes.json();
     const messages = msgData.data?.slice(0, 10) || [];
@@ -63,9 +60,8 @@ export default async function handler(req, res) {
     }
 
     await db.end();
-    res.status(200).send('✅ 10 messages inserted');
+    res.status(200).send('OK');
   } catch (err) {
-    console.error('❌ Manual insert failed:', err);
-    res.status(500).send('❌ Insert failed');
+    res.status(500).send('Import failed');
   }
 }
