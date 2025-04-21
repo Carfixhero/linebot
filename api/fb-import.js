@@ -1,3 +1,4 @@
+// ✅ FINAL VERSION: Always fetch messages regardless of convo insert
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
@@ -17,38 +18,65 @@ export default async function handler(req, res) {
     const convoData = await convoRes.json();
 
     if (!Array.isArray(convoData?.data)) {
-      console.warn('⚠️ No valid data received from Facebook');
       await db.end();
-      return res.status(200).end(); // ✅ Silent clean exit
+      return res.status(200).end();
     }
-
-    let inserted = 0;
 
     for (const convo of convoData.data) {
       const convoId = typeof convo?.id === 'string' ? convo.id.trim() : null;
+      if (!convoId) continue;
 
-      if (!convoId) {
-        console.warn('❌ Skipping invalid or empty convo:', convo);
-        continue;
-      }
-
-      const [result] = await db.execute(
-        `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM)
-         VALUES (?, 'facebook')`,
+      await db.execute(
+        `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
         [convoId]
       );
 
-      if (result.affectedRows > 0) {
-        inserted++;
+      const [[{ ID: bcId } = {}]] = await db.execute(
+        `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
+        [convoId]
+      );
+      if (!bcId) continue;
+
+      const msgRes = await fetch(`https://graph.facebook.com/v22.0/${convoId}/messages?access_token=${ACCESS_TOKEN}`);
+      const msgData = await msgRes.json();
+      const messages = msgData.data || [];
+
+      for (const msg of messages) {
+        const messageId = msg.id;
+        const text = msg.message;
+        const created = new Date(msg.created_time);
+        const userId = msg.from?.id || null;
+        const name = msg.from?.name || null;
+
+        if (!text || typeof text !== 'string') continue;
+
+        const [exists] = await db.execute(`SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`, [messageId]);
+        if (exists.length > 0) continue;
+
+        await db.execute(
+          `INSERT INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME)
+           VALUES (?, 'in', ?, ?)`,
+          [bcId, messageId, created]
+        );
+
+        const [[{ ID: bmId } = {}]] = await db.execute(
+          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+          [messageId]
+        );
+        if (!bmId) continue;
+
+        await db.execute(
+          `INSERT INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
+           VALUES (?, ?, ?, ?, ?)`,
+          [bmId, userId, name, text, created]
+        );
       }
     }
 
     await db.end();
-    return res.status(200).end(); // ✅ No output, clean finish
-
+    return res.status(200).end();
   } catch (err) {
-    console.error('❌ Error syncing Facebook conversations:', err);
     await db.end();
-    return res.status(200).end(); // Still respond with 200 to avoid re-tries
+    return res.status(200).end();
   }
 }
