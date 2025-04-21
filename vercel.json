@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "crons": [
+    {
+      "path": "/api/translate-loop",
+      "schedule": "*/2 * * * *"
+    }
+  ],
   "routes": [
     {
       "src": "/api/(.*)",
