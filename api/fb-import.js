@@ -44,12 +44,13 @@ export default async function handler(req, res) {
 
     await db.end();
 
-    // ✅ Always return something
-    return res.status(200).json({ message: '✅ Sync complete', inserted });
+   
 
   } catch (err) {
     console.error('❌ Error fetching or inserting:', err);
     await db.end();
     return res.status(500).json({ error: 'Internal error', detail: err.message });
+     // ✅ Always return something
+    return res.status(200).json({ message: '✅ Sync complete', inserted });
   }
 }
