@@ -1,8 +1,11 @@
+// ✅ FB conversation insert debug script
+// Logs exact structure of each conversation object before inserting
+
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
-  res.status(200).send('✅ Starting conversation insert test');
+  res.status(200).send('✅ Starting FB conversation debug');
 
   const db = await mysql.createConnection({
     host: process.env.MYSQL_HOST,
@@ -20,8 +23,15 @@ export default async function handler(req, res) {
   if (!Array.isArray(convoData.data)) throw new Error('No conversations returned');
 
   for (const convo of convoData.data) {
+    console.log('💬 Raw conversation object:', convo);
+
     const convoId = convo.id;
-    console.log(`📥 Inserting conversation: ${convoId}`);
+    console.log('📥 Extracted convoId:', convoId);
+
+    if (!convoId) {
+      console.warn('❌ convo.id is undefined — skipping');
+      continue;
+    }
 
     await db.execute(
       `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
@@ -30,5 +40,5 @@ export default async function handler(req, res) {
   }
 
   await db.end();
-  console.log('✅ All conversations processed');
+  console.log('✅ Conversation insert debug complete');
 }
