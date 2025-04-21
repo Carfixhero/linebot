@@ -20,7 +20,7 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     console.log('📨 Incoming Facebook/LINE webhook:', JSON.stringify(req.body, null, 2));
-
+res.status(200).send('OK');
     try {
       const body = req.body;
 
