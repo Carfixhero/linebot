@@ -5,5 +5,11 @@
       "src": "/api/(.*)",
       "dest": "/api/$1.js"
     }
+  ],
+  "cron": [
+    {
+      "path": "/api/translate-loop",
+      "schedule": "*/2 * * * *"
+    }
   ]
 }
