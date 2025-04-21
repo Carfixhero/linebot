@@ -1,4 +1,4 @@
-// ✅ FINAL FULL FB IMPORT — Conversations + Messages (With Proper Timeout Handling)
+// ✅ FINAL CLEAN VERSION — Skips existing convos, avoids timeouts, minimal logging
 
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
@@ -14,9 +14,6 @@ export default async function handler(req, res) {
   const PAGE_ID = process.env.FB_PAGE_ID;
   const ACCESS_TOKEN = process.env.FB_PAGE_TOKEN;
 
-  let insertedConvos = 0;
-  let insertedMessages = 0;
-
   try {
     const convoRes = await fetch(`https://graph.facebook.com/v22.0/${PAGE_ID}/conversations?access_token=${ACCESS_TOKEN}`);
     const convoData = await convoRes.json();
@@ -26,17 +23,18 @@ export default async function handler(req, res) {
     for (const convo of convoData.data) {
       const convoId = convo.id;
 
-      if (!convoId || typeof convoId !== 'string') {
-        console.warn(`❌ Invalid convo ID:`, convo);
-        continue;
-      }
+      if (!convoId || typeof convoId !== 'string') continue;
 
-      console.log(`📥 Inserting conversation: ${convoId}`);
-      await db.execute(
-        `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
+      const [check] = await db.execute(
+        `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
         [convoId]
       );
-      insertedConvos++;
+      if (check.length > 0) continue;
+
+      await db.execute(
+        `INSERT INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
+        [convoId]
+      );
 
       const [[{ ID: bcId } = {}]] = await db.execute(
         `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
@@ -57,10 +55,7 @@ export default async function handler(req, res) {
 
         if (!text || typeof text !== 'string') continue;
 
-        const [exists] = await db.execute(
-          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-          [messageId]
-        );
+        const [exists] = await db.execute(`SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`, [messageId]);
         if (exists.length > 0) continue;
 
         await db.execute(
@@ -79,13 +74,11 @@ export default async function handler(req, res) {
            VALUES (?, ?, ?, ?, ?)`,
           [bmId, userId, name, text, timestamp]
         );
-
-        insertedMessages++;
       }
     }
 
     await db.end();
-    res.status(200).send(`✅ Inserted ${insertedConvos} conversations, ${insertedMessages} messages`);
+    res.status(200).send('✅ FB import complete');
   } catch (err) {
     console.error('❌ FB import error:', err);
     res.status(500).send('❌ Import failed');
