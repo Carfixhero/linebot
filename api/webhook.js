@@ -135,90 +135,89 @@ export default async function handler(req, res) {
       if (platform === 'facebook' && body?.entry?.length > 0) {
         for (const entry of body.entry) {
           for (const msg of entry.messaging || []) {
-       if (msg.message) {
+if (msg.message) {
   const direction = msg.message.is_echo ? 'out' : 'in';
 
+  const userId = msg.sender.id;
+  const messageId = msg.message.mid;
+  const timestamp = new Date(msg.timestamp);
 
-              const userId = msg.sender.id;
-              const messageId = msg.message.mid;
-              const timestamp = new Date(msg.timestamp);
+  let messageText = '[non-text message]';
+  let fileUrl = null;
+  let base64Id = null;
 
-              let messageText = '[non-text message]';
-              let fileUrl = null;
-              let base64Id = null;
+  if (msg.message.text) {
+    messageText = msg.message.text;
+  } else if (msg.message.attachments?.length > 0) {
+    const attachment = msg.message.attachments[0];
+    messageText = `[${attachment.type} attachment]`;
+    fileUrl = attachment.payload?.url || null;
 
-              if (msg.message.text) {
-                messageText = msg.message.text;
-              } else if (msg.message.attachments?.length > 0) {
-                const attachment = msg.message.attachments[0];
-                messageText = `[${attachment.type} attachment]`;
-                fileUrl = attachment.payload?.url || null;
+    if (fileUrl) {
+      try {
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error(`FB download failed: ${res.statusText}`);
 
-                if (fileUrl) {
-                  try {
-                    const res = await fetch(fileUrl);
-                    if (!res.ok) throw new Error(`FB download failed: ${res.statusText}`);
+        const buffer = await res.buffer();
+        const base64Raw = buffer.toString('base64');
+        const mimeType = res.headers.get('content-type') || MIME_MAP[attachment.type] || 'application/octet-stream';
 
-                    const buffer = await res.buffer();
-                    const base64Raw = buffer.toString('base64');
-                    const mimeType = res.headers.get('content-type') || MIME_MAP[attachment.type] || 'application/octet-stream';
+        const [result] = await db.execute(
+          `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
+          [base64Raw, mimeType]
+        );
+        base64Id = result.insertId;
 
-                    const [result] = await db.execute(
-                      `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
-                      [base64Raw, mimeType]
-                    );
-                    base64Id = result.insertId;
+      } catch (err) {
+        console.error('Facebook base64 fetch error:', err.message);
+        await db.execute(
+          `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+          [err.message, err.stack]
+        );
+      }
+    }
+  }
 
-                  } catch (err) {
-                    console.error('Facebook base64 fetch error:', err.message);
-                    await db.execute(
-                      `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-                      [err.message, err.stack]
-                    );
-                  }
-                }
-              }
+  await db.execute(
+    `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
+    [userId]
+  );
 
-              await db.execute(
-                `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
-                [userId]
-              );
+  const [[{ ID: bcId } = {}]] = await db.execute(
+    `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
+    [userId]
+  );
 
-              const [[{ ID: bcId } = {}]] = await db.execute(
-                `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'facebook'`,
-                [userId]
-              );
+  await db.execute(
+    `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, ?, ?, ?)`,
+    [bcId, direction, messageId, timestamp]
+  );
 
-              await db.execute(
-               `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, ?, ?, ?)`,
-[bcId, direction, messageId, timestamp]
+  const [[{ ID: bmId } = {}]] = await db.execute(
+    `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+    [messageId]
+  );
 
-              );
+  let name = null;
+  try {
+    const detailRes = await fetch(`https://graph.facebook.com/v22.0/${messageId}?fields=from&access_token=${process.env.FB_PAGE_TOKEN}`);
+    const detailData = await detailRes.json();
+    name = detailData.from?.name || null;
+  } catch (err) {
+    console.error('Facebook detail fetch error:', err.message);
+    await db.execute(
+      `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+      [err.message, err.stack]
+    );
+  }
 
-              const [[{ ID: bmId } = {}]] = await db.execute(
-                `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-                [messageId]
-              );
+  await db.execute(
+    `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
+  );
+}
 
-              let name = null;
-              try {
-                const detailRes = await fetch(`https://graph.facebook.com/v22.0/${messageId}?fields=from&access_token=${process.env.FB_PAGE_TOKEN}`);
-                const detailData = await detailRes.json();
-                name = detailData.from?.name || null;
-              } catch (err) {
-                console.error('Facebook detail fetch error:', err.message);
-                await db.execute(
-                  `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-                  [err.message, err.stack]
-                );
-              }
-
-              await db.execute(
-                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
-              );
-            }
           }
         }
       }
