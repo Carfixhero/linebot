@@ -35,12 +35,21 @@ export default async function handler(req, res) {
         database: process.env.MYSQL_DATABASE,
       });
 
-      const platform = body?.events ? 'line' : body?.entry ? 'facebook' : 'unknown';
-      await db.execute(
-        `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
-        [platform, JSON.stringify(body)]
-      );
+const platform = body?.events ? 'line' : body?.entry ? 'facebook' : 'unknown';
 
+if (body?.entry?.length > 0) {
+  for (const entry of body.entry) {
+    await db.execute(
+      `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
+      [platform, JSON.stringify(entry)]
+    );
+  }
+} else {
+  await db.execute(
+    `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
+    [platform, JSON.stringify(body)]
+  );
+}
       // ✅ LINE
       if (platform === 'line' && body?.events?.length > 0) {
         for (const event of body.events) {
