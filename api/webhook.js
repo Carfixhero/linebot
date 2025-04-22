@@ -161,7 +161,14 @@ if (body?.entry?.length > 0) {
       if (attachment.type === 'image' && msg.message.sticker_id) {
   messageText = `[sticker ID: ${msg.message.sticker_id}]`;
 } else {
+  if (attachment.type === 'image' && msg.message.sticker_id) {
+  messageText = `[sticker ID: ${msg.message.sticker_id}]`;
+} else if (attachment.type === 'image' && attachment.payload?.sticker_id) {
+  messageText = `[reaction sticker ID: ${attachment.payload.sticker_id}]`;
+} else {
   messageText = `[${attachment.type} attachment]`;
+}
+
 }
 
       fileUrl = attachment.payload?.url || null;
