@@ -23,13 +23,24 @@ export default async function handler(req, res) {
     }
 
     const { ID, CONTENT } = rows[0];
+    const clean = CONTENT?.trim() || '';
 
-    if (!CONTENT || CONTENT.trim() === '') {
+    const isSkippable =
+      clean === '' ||
+      /^\[.*\]$/.test(clean) ||      // e.g., [image attachment], [reaction: 👍]
+      /^[\d\s]+$/.test(clean);       // only numbers or spaces
+
+    if (isSkippable) {
       await db.execute(
         'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
         ['NA', ID]
       );
-      return res.status(200).json({ skipped: true, reason: 'Empty content', id: ID });
+      return res.status(200).json({
+        skipped: true,
+        reason: 'Non-translatable content',
+        id: ID,
+        original: CONTENT
+      });
     }
 
     const response = await openai.chat.completions.create({
@@ -57,7 +68,11 @@ Only reply with the clean, natural translation — no explanation.`
         'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
         ['NA', ID]
       );
-      return res.status(200).json({ skipped: true, reason: 'OpenAI gave empty', id: ID });
+      return res.status(200).json({
+        skipped: true,
+        reason: 'OpenAI gave empty',
+        id: ID
+      });
     }
 
     await db.execute(
