@@ -155,48 +155,57 @@ if (body?.entry?.length > 0) {
     let base64Id = null;
 
     if (msg.message.text) {
-      messageText = msg.message.text;
-    } else if (msg.message.attachments?.length > 0) {
-      const attachment = msg.message.attachments[0];
-      if (attachment.type === 'image' && msg.message.sticker_id) {
-  messageText = `[sticker ID: ${msg.message.sticker_id}]`;
-} else {
-  if (attachment.type === 'image' && msg.message.sticker_id) {
-  messageText = `[sticker ID: ${msg.message.sticker_id}]`;
-} else if (attachment.type === 'image' && attachment.payload?.sticker_id) {
-  messageText = `[reaction sticker ID: ${attachment.payload.sticker_id}]`;
-} else {
-  messageText = `[${attachment.type} attachment]`;
+  messageText = msg.message.text;
 }
 
-}
+// 👇 Insert this full new block next:
+if (msg.message.attachments?.length > 0) {
+  const attachment = msg.message.attachments[0];
+  const STICKER_MAP = {
+    '369239263222822': '👍',
+    '369239343222814': '❤️',
+    '369239383222810': '😆',
+    '369239263222814': '😮',
+    '369239263222811': '😢',
+    '369239263222812': '😡',
+  };
 
-      fileUrl = attachment.payload?.url || null;
+  const stickerId = attachment.payload?.sticker_id || msg.message.sticker_id;
 
-      if (fileUrl) {
-        try {
-          const res = await fetch(fileUrl);
-          if (!res.ok) throw new Error(`FB download failed: ${res.statusText}`);
+  if (attachment.type === 'image' && stickerId) {
+    const emoji = STICKER_MAP[stickerId] || `[sticker ID: ${stickerId}]`;
+    messageText = `[reaction: ${emoji}]`;
+  } else {
+    messageText = `[${attachment.type} attachment]`;
+  }
 
-          const buffer = await res.buffer();
-          const base64Raw = buffer.toString('base64');
-          const mimeType = res.headers.get('content-type') || MIME_MAP[attachment.type] || 'application/octet-stream';
+  fileUrl = attachment.payload?.url || null;
 
-          const [result] = await db.execute(
-            `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
-            [base64Raw, mimeType]
-          );
-          base64Id = result.insertId;
+  if (fileUrl) {
+    try {
+      const res = await fetch(fileUrl);
+      if (!res.ok) throw new Error(`FB download failed: ${res.statusText}`);
 
-        } catch (err) {
-          console.error('Facebook base64 fetch error:', err.message);
-          await db.execute(
-            `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-            [err.message, err.stack]
-          );
-        }
-      }
+      const buffer = await res.buffer();
+      const base64Raw = buffer.toString('base64');
+      const mimeType = res.headers.get('content-type') || MIME_MAP[attachment.type] || 'application/octet-stream';
+
+      const [result] = await db.execute(
+        `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
+        [base64Raw, mimeType]
+      );
+      base64Id = result.insertId;
+
+    } catch (err) {
+      console.error('Facebook base64 fetch error:', err.message);
+      await db.execute(
+        `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+        [err.message, err.stack]
+      );
     }
+  }
+}
+
 
     await db.execute(
       `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
