@@ -1,13 +1,5 @@
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
-import { v4 as uuidv4 } from 'uuid';
-
-async function fetchAsBase64(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch file from ${url}`);
-  const buffer = await res.buffer();
-  return buffer.toString('base64');
-}
 
 export default async function handler(req, res) {
   const VERIFY_TOKEN = 'carfix123';
@@ -36,14 +28,13 @@ export default async function handler(req, res) {
         database: process.env.MYSQL_DATABASE,
       });
 
-      // Log raw body
       const platform = body?.events ? 'line' : body?.entry ? 'facebook' : 'unknown';
       await db.execute(
         `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
         [platform, JSON.stringify(body)]
       );
 
-      // LINE processing
+      // ✅ LINE Messages
       if (platform === 'line' && body?.events?.length > 0) {
         for (const event of body.events) {
           const userId = event.source?.userId || null;
@@ -52,7 +43,6 @@ export default async function handler(req, res) {
 
           let messageText = '[unknown LINE event]';
           let fileUrl = null;
-          let base64Data = null;
 
           if (event.message?.type === 'text') {
             messageText = event.message.text;
@@ -62,21 +52,6 @@ export default async function handler(req, res) {
             messageText = `[postback] ${event.postback.data}`;
           } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
             messageText = `[${event.message.type} attachment]`;
-            try {
-              const contentRes = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
-                headers: {
-                  Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-                },
-              });
-              const buffer = await contentRes.buffer();
-              base64Data = buffer.toString('base64');
-            } catch (err) {
-              console.error('LINE base64 fetch error:', err.message);
-              await db.execute(
-                `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-                [err.message, err.stack]
-              );
-            }
           }
 
           let name = null;
@@ -113,14 +88,14 @@ export default async function handler(req, res) {
           );
 
           await db.execute(
-            `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_DATA, CREATED_TIME)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [bmId, userId, name, messageText, fileUrl, base64Data, timestamp]
+            `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [bmId, userId, name, messageText, fileUrl, timestamp]
           );
         }
       }
 
-      // Facebook processing
+      // ✅ Facebook Messages
       if (platform === 'facebook' && body?.entry?.length > 0) {
         for (const entry of body.entry) {
           for (const msg of entry.messaging || []) {
@@ -131,7 +106,6 @@ export default async function handler(req, res) {
 
               let messageText = '[non-text message]';
               let fileUrl = null;
-              let base64Data = null;
 
               if (msg.message.text) {
                 messageText = msg.message.text;
@@ -139,18 +113,6 @@ export default async function handler(req, res) {
                 const attachment = msg.message.attachments[0];
                 messageText = `[${attachment.type} attachment]`;
                 fileUrl = attachment.payload?.url || null;
-
-                if (fileUrl) {
-                  try {
-                    base64Data = await fetchAsBase64(fileUrl);
-                  } catch (err) {
-                    console.error('Facebook base64 fetch error:', err.message);
-                    await db.execute(
-                      `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-                      [err.message, err.stack]
-                    );
-                  }
-                }
               }
 
               await db.execute(
@@ -180,16 +142,12 @@ export default async function handler(req, res) {
                 name = detailData.from?.name || null;
               } catch (err) {
                 console.error('Facebook detail fetch error:', err.message);
-                await db.execute(
-                  `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-                  [err.message, err.stack]
-                );
               }
 
               await db.execute(
-                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_DATA, CREATED_TIME)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [bmId, userId, name, messageText, fileUrl, base64Data, timestamp]
+                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [bmId, userId, name, messageText, fileUrl, timestamp]
               );
             }
           }
@@ -200,10 +158,6 @@ export default async function handler(req, res) {
       return res.status(200).end();
     } catch (err) {
       if (db) {
-        await db.execute(
-          `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-          [err.message, err.stack]
-        );
         await db.end();
       }
       console.error('Webhook handler error:', err);
