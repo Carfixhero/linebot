@@ -34,7 +34,7 @@ export default async function handler(req, res) {
         [platform, JSON.stringify(body)]
       );
 
-    // ✅ LINE Messages Handling
+// ✅ LINE Messages Handling
 if (platform === 'line' && body?.events?.length > 0) {
   for (const event of body.events) {
     const userId = event.source?.userId || null;
@@ -43,6 +43,7 @@ if (platform === 'line' && body?.events?.length > 0) {
 
     let messageText = '[unknown LINE event]';
     let fileUrl = null;
+    let base64Id = null;
 
     if (event.message?.type === 'text') {
       messageText = event.message.text;
@@ -52,7 +53,33 @@ if (platform === 'line' && body?.events?.length > 0) {
       messageText = `[postback] ${event.postback.data}`;
     } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
       messageText = `[${event.message.type} attachment]`;
-      fileUrl = `linefile:${messageId}`; // This is the placeholder we'll use later
+      fileUrl = `linefile:${messageId}`;
+
+      try {
+        const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
+          headers: {
+            Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+          },
+        });
+
+        if (!res.ok) throw new Error(`LINE download failed: ${res.statusText}`);
+
+        const buffer = await res.buffer();
+        const base64Raw = buffer.toString('base64');
+
+        const [result] = await db.execute(
+          `INSERT INTO BOT_MES_BASE64 (BASE64_DATA) VALUES (?)`,
+          [base64Raw]
+        );
+        base64Id = result.insertId;
+
+      } catch (err) {
+        console.error('LINE base64 fetch error:', err.message);
+        await db.execute(
+          `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+          [err.message, err.stack]
+        );
+      }
     }
 
     let name = null;
@@ -89,9 +116,9 @@ if (platform === 'line' && body?.events?.length > 0) {
     );
 
     await db.execute(
-      `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [bmId, userId, name, messageText, fileUrl, timestamp]
+      `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
     );
   }
 }
