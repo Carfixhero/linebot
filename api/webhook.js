@@ -34,66 +34,68 @@ export default async function handler(req, res) {
         [platform, JSON.stringify(body)]
       );
 
-      // ✅ LINE Messages
-      if (platform === 'line' && body?.events?.length > 0) {
-        for (const event of body.events) {
-          const userId = event.source?.userId || null;
-          const messageId = event.message?.id || `event_${event.type}_${Date.now()}`;
-          const timestamp = new Date(event.timestamp);
+    // ✅ LINE Messages Handling
+if (platform === 'line' && body?.events?.length > 0) {
+  for (const event of body.events) {
+    const userId = event.source?.userId || null;
+    const messageId = event.message?.id || `event_${event.type}_${Date.now()}`;
+    const timestamp = new Date(event.timestamp);
 
-          let messageText = '[unknown LINE event]';
-          let fileUrl = null;
+    let messageText = '[unknown LINE event]';
+    let fileUrl = null;
 
-          if (event.message?.type === 'text') {
-            messageText = event.message.text;
-          } else if (event.message?.type === 'sticker') {
-            messageText = '[sticker message]';
-          } else if (event.postback?.data) {
-            messageText = `[postback] ${event.postback.data}`;
-          } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
-            messageText = `[${event.message.type} attachment]`;
-          }
+    if (event.message?.type === 'text') {
+      messageText = event.message.text;
+    } else if (event.message?.type === 'sticker') {
+      messageText = '[sticker message]';
+    } else if (event.postback?.data) {
+      messageText = `[postback] ${event.postback.data}`;
+    } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
+      messageText = `[${event.message.type} attachment]`;
+      fileUrl = `linefile:${messageId}`; // This is the placeholder we'll use later
+    }
 
-          let name = null;
-          try {
-            const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
-              headers: {
-                Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-              },
-            });
-            const profile = await profileRes.json();
-            name = profile.displayName || null;
-          } catch (err) {
-            console.error('LINE profile fetch error:', err.message);
-          }
+    let name = null;
+    try {
+      const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+        headers: {
+          Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+        },
+      });
+      const profile = await profileRes.json();
+      name = profile.displayName || null;
+    } catch (err) {
+      console.error('LINE profile fetch error:', err.message);
+    }
 
-          await db.execute(
-            `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
-            [userId]
-          );
+    await db.execute(
+      `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
+      [userId]
+    );
 
-          const [[{ ID: bcId } = {}]] = await db.execute(
-            `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
-            [userId]
-          );
+    const [[{ ID: bcId } = {}]] = await db.execute(
+      `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
+      [userId]
+    );
 
-          await db.execute(
-            `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
-            [bcId, messageId, timestamp]
-          );
+    await db.execute(
+      `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
+      [bcId, messageId, timestamp]
+    );
 
-          const [[{ ID: bmId } = {}]] = await db.execute(
-            `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-            [messageId]
-          );
+    const [[{ ID: bmId } = {}]] = await db.execute(
+      `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+      [messageId]
+    );
 
-          await db.execute(
-            `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [bmId, userId, name, messageText, fileUrl, timestamp]
-          );
-        }
-      }
+    await db.execute(
+      `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [bmId, userId, name, messageText, fileUrl, timestamp]
+    );
+  }
+}
+
 
       // ✅ Facebook Messages
       if (platform === 'facebook' && body?.entry?.length > 0) {
