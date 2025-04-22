@@ -1,8 +1,17 @@
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
+import { v4 as uuidv4 } from 'uuid';
+
+async function fetchAsBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch file from ${url}`);
+  const buffer = await res.buffer();
+  return buffer.toString('base64');
+}
 
 export default async function handler(req, res) {
   const VERIFY_TOKEN = 'carfix123';
+  let db;
 
   if (req.method === 'GET') {
     const mode = req.query['hub.mode'];
@@ -17,7 +26,6 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    let db;
     try {
       const body = req.body;
 
@@ -28,71 +36,122 @@ export default async function handler(req, res) {
         database: process.env.MYSQL_DATABASE,
       });
 
-      // Log LINE or Facebook webhook body to BOT_WEBHOOK_LOG
-      if (body?.events?.[0]) {
-        await db.execute(
-          `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
-          ['line', JSON.stringify(body)]
-        );
-      } else if (body?.entry?.[0]?.messaging) {
-        await db.execute(
-          `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
-          ['facebook', JSON.stringify(body)]
-        );
+      // Log raw body
+      const platform = body?.events ? 'line' : body?.entry ? 'facebook' : 'unknown';
+      await db.execute(
+        `INSERT INTO BOT_WEBHOOK_LOG (PLATFORM, RAW_JSON) VALUES (?, ?)`,
+        [platform, JSON.stringify(body)]
+      );
+
+      // LINE processing
+      if (platform === 'line' && body?.events?.length > 0) {
+        for (const event of body.events) {
+          const userId = event.source?.userId || null;
+          const messageId = event.message?.id || `event_${event.type}_${Date.now()}`;
+          const timestamp = new Date(event.timestamp);
+
+          let messageText = '[unknown LINE event]';
+          let fileUrl = null;
+          let base64Data = null;
+
+          if (event.message?.type === 'text') {
+            messageText = event.message.text;
+          } else if (event.message?.type === 'sticker') {
+            messageText = '[sticker message]';
+          } else if (event.postback?.data) {
+            messageText = `[postback] ${event.postback.data}`;
+          } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
+            messageText = `[${event.message.type} attachment]`;
+            try {
+              const contentRes = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
+                headers: {
+                  Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+                },
+              });
+              const buffer = await contentRes.buffer();
+              base64Data = buffer.toString('base64');
+            } catch (err) {
+              console.error('LINE base64 fetch error:', err.message);
+              await db.execute(
+                `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+                [err.message, err.stack]
+              );
+            }
+          }
+
+          let name = null;
+          try {
+            const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+              headers: {
+                Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+              },
+            });
+            const profile = await profileRes.json();
+            name = profile.displayName || null;
+          } catch (err) {
+            console.error('LINE profile fetch error:', err.message);
+          }
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
+            [userId]
+          );
+
+          const [[{ ID: bcId } = {}]] = await db.execute(
+            `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
+            [userId]
+          );
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
+            [bcId, messageId, timestamp]
+          );
+
+          const [[{ ID: bmId } = {}]] = await db.execute(
+            `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+            [messageId]
+          );
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_DATA, CREATED_TIME)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [bmId, userId, name, messageText, fileUrl, base64Data, timestamp]
+          );
+        }
       }
 
-      // LINE messages
-      if (body?.events?.[0]?.message) {
-        const event = body.events[0];
-        const userId = event.source.userId;
-        const messageText = event.message.text;
-        const messageId = event.message.id;
-        const timestamp = new Date(event.timestamp);
-
-        const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
-          headers: {
-            Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-          },
-        });
-        const profile = await profileRes.json();
-        const name = profile.displayName || null;
-
-        await db.execute(
-          `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
-          [userId]
-        );
-
-        const [[{ ID: bcId } = {}]] = await db.execute(
-          `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
-          [userId]
-        );
-
-        await db.execute(
-          `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
-          [bcId, messageId, timestamp]
-        );
-
-        const [[{ ID: bmId } = {}]] = await db.execute(
-          `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-          [messageId]
-        );
-
-        await db.execute(
-          `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
-           VALUES (?, ?, ?, ?, ?)`,
-          [bmId, userId, name, messageText, timestamp]
-        );
-      }
-
-      // Facebook messages
-      if (body?.entry?.length > 0) {
+      // Facebook processing
+      if (platform === 'facebook' && body?.entry?.length > 0) {
         for (const entry of body.entry) {
           for (const msg of entry.messaging || []) {
             if (msg.message) {
               const userId = msg.sender.id;
-              const messageText = msg.message.text || '[non-text message]';
               const messageId = msg.message.mid;
               const timestamp = new Date(msg.timestamp);
+
+              let messageText = '[non-text message]';
+              let fileUrl = null;
+              let base64Data = null;
+
+              if (msg.message.text) {
+                messageText = msg.message.text;
+              } else if (msg.message.attachments?.length > 0) {
+                const attachment = msg.message.attachments[0];
+                messageText = `[${attachment.type} attachment]`;
+                fileUrl = attachment.payload?.url || null;
+
+                if (fileUrl) {
+                  try {
+                    base64Data = await fetchAsBase64(fileUrl);
+                  } catch (err) {
+                    console.error('Facebook base64 fetch error:', err.message);
+                    await db.execute(
+                      `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+                      [err.message, err.stack]
+                    );
+                  }
+                }
+              }
 
               await db.execute(
                 `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'facebook')`,
@@ -128,9 +187,9 @@ export default async function handler(req, res) {
               }
 
               await db.execute(
-                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, CREATED_TIME)
-                 VALUES (?, ?, ?, ?, ?)`,
-                [bmId, userId, name, messageText, timestamp]
+                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_DATA, CREATED_TIME)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [bmId, userId, name, messageText, fileUrl, base64Data, timestamp]
               );
             }
           }
