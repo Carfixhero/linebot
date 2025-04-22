@@ -1,6 +1,13 @@
 import mysql from 'mysql2/promise';
 import fetch from 'node-fetch';
 
+const MIME_MAP = {
+  image: 'image/jpeg',
+  audio: 'audio/mpeg',
+  video: 'video/mp4',
+  file: 'application/octet-stream',
+};
+
 export default async function handler(req, res) {
   const VERIFY_TOKEN = 'carfix123';
   let db;
@@ -34,97 +41,97 @@ export default async function handler(req, res) {
         [platform, JSON.stringify(body)]
       );
 
-// ✅ LINE Messages Handling
-if (platform === 'line' && body?.events?.length > 0) {
-  for (const event of body.events) {
-    const userId = event.source?.userId || null;
-    const messageId = event.message?.id || `event_${event.type}_${Date.now()}`;
-    const timestamp = new Date(event.timestamp);
+      // ✅ LINE
+      if (platform === 'line' && body?.events?.length > 0) {
+        for (const event of body.events) {
+          const userId = event.source?.userId || null;
+          const messageId = event.message?.id || `event_${event.type}_${Date.now()}`;
+          const timestamp = new Date(event.timestamp);
 
-    let messageText = '[unknown LINE event]';
-    let fileUrl = null;
-    let base64Id = null;
+          let messageText = '[unknown LINE event]';
+          let fileUrl = null;
+          let base64Id = null;
 
-    if (event.message?.type === 'text') {
-      messageText = event.message.text;
-    } else if (event.message?.type === 'sticker') {
-      messageText = '[sticker message]';
-    } else if (event.postback?.data) {
-      messageText = `[postback] ${event.postback.data}`;
-    } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
-      messageText = `[${event.message.type} attachment]`;
-      fileUrl = `linefile:${messageId}`;
+          if (event.message?.type === 'text') {
+            messageText = event.message.text;
+          } else if (event.message?.type === 'sticker') {
+            messageText = '[sticker message]';
+          } else if (event.postback?.data) {
+            messageText = `[postback] ${event.postback.data}`;
+          } else if (['image', 'video', 'audio', 'file'].includes(event.message?.type)) {
+            messageText = `[${event.message.type} attachment]`;
+            fileUrl = `linefile:${messageId}`;
 
-      try {
-        const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
-          headers: {
-            Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-          },
-        });
+            try {
+              const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
+                headers: {
+                  Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+                },
+              });
 
-        if (!res.ok) throw new Error(`LINE download failed: ${res.statusText}`);
+              if (!res.ok) throw new Error(`LINE download failed: ${res.statusText}`);
 
-        const buffer = await res.buffer();
-        const base64Raw = buffer.toString('base64');
+              const buffer = await res.buffer();
+              const base64Raw = buffer.toString('base64');
+              const mimeType = res.headers.get('content-type') || MIME_MAP[event.message.type] || 'application/octet-stream';
 
-        const [result] = await db.execute(
-          `INSERT INTO BOT_MES_BASE64 (BASE64_DATA) VALUES (?)`,
-          [base64Raw]
-        );
-        base64Id = result.insertId;
+              const [result] = await db.execute(
+                `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
+                [base64Raw, mimeType]
+              );
+              base64Id = result.insertId;
 
-      } catch (err) {
-        console.error('LINE base64 fetch error:', err.message);
-        await db.execute(
-          `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
-          [err.message, err.stack]
-        );
+            } catch (err) {
+              console.error('LINE base64 fetch error:', err.message);
+              await db.execute(
+                `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+                [err.message, err.stack]
+              );
+            }
+          }
+
+          let name = null;
+          try {
+            const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+              headers: {
+                Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+              },
+            });
+            const profile = await profileRes.json();
+            name = profile.displayName || null;
+          } catch (err) {
+            console.error('LINE profile fetch error:', err.message);
+          }
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
+            [userId]
+          );
+
+          const [[{ ID: bcId } = {}]] = await db.execute(
+            `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
+            [userId]
+          );
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
+            [bcId, messageId, timestamp]
+          );
+
+          const [[{ ID: bmId } = {}]] = await db.execute(
+            `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
+            [messageId]
+          );
+
+          await db.execute(
+            `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
+          );
+        }
       }
-    }
 
-    let name = null;
-    try {
-      const profileRes = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
-        headers: {
-          Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-        },
-      });
-      const profile = await profileRes.json();
-      name = profile.displayName || null;
-    } catch (err) {
-      console.error('LINE profile fetch error:', err.message);
-    }
-
-    await db.execute(
-      `INSERT IGNORE INTO BOT_CONVERSATIONS (CONVERSATION_ID, PLATFORM) VALUES (?, 'line')`,
-      [userId]
-    );
-
-    const [[{ ID: bcId } = {}]] = await db.execute(
-      `SELECT ID FROM BOT_CONVERSATIONS WHERE CONVERSATION_ID = ? AND PLATFORM = 'line'`,
-      [userId]
-    );
-
-    await db.execute(
-      `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
-      [bcId, messageId, timestamp]
-    );
-
-    const [[{ ID: bmId } = {}]] = await db.execute(
-      `SELECT ID FROM BOT_MESSAGES WHERE MESSAGE_ID = ?`,
-      [messageId]
-    );
-
-    await db.execute(
-      `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
-    );
-  }
-}
-
-
-      // ✅ Facebook Messages
+      // ✅ Facebook
       if (platform === 'facebook' && body?.entry?.length > 0) {
         for (const entry of body.entry) {
           for (const msg of entry.messaging || []) {
@@ -135,6 +142,7 @@ if (platform === 'line' && body?.events?.length > 0) {
 
               let messageText = '[non-text message]';
               let fileUrl = null;
+              let base64Id = null;
 
               if (msg.message.text) {
                 messageText = msg.message.text;
@@ -142,6 +150,30 @@ if (platform === 'line' && body?.events?.length > 0) {
                 const attachment = msg.message.attachments[0];
                 messageText = `[${attachment.type} attachment]`;
                 fileUrl = attachment.payload?.url || null;
+
+                if (fileUrl) {
+                  try {
+                    const res = await fetch(fileUrl);
+                    if (!res.ok) throw new Error(`FB download failed: ${res.statusText}`);
+
+                    const buffer = await res.buffer();
+                    const base64Raw = buffer.toString('base64');
+                    const mimeType = res.headers.get('content-type') || MIME_MAP[attachment.type] || 'application/octet-stream';
+
+                    const [result] = await db.execute(
+                      `INSERT INTO BOT_MES_BASE64 (BASE64_DATA, MIME_TYPE) VALUES (?, ?)`,
+                      [base64Raw, mimeType]
+                    );
+                    base64Id = result.insertId;
+
+                  } catch (err) {
+                    console.error('Facebook base64 fetch error:', err.message);
+                    await db.execute(
+                      `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+                      [err.message, err.stack]
+                    );
+                  }
+                }
               }
 
               await db.execute(
@@ -171,12 +203,16 @@ if (platform === 'line' && body?.events?.length > 0) {
                 name = detailData.from?.name || null;
               } catch (err) {
                 console.error('Facebook detail fetch error:', err.message);
+                await db.execute(
+                  `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+                  [err.message, err.stack]
+                );
               }
 
               await db.execute(
-                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, CREATED_TIME)
-                 VALUES (?, ?, ?, ?, ?, ?)`,
-                [bmId, userId, name, messageText, fileUrl, timestamp]
+                `INSERT IGNORE INTO BOT_MES_CONTENT (BM_ID, USERIDENT, NAME, CONTENT, FILE_URL, BASE64_ID, CREATED_TIME)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [bmId, userId, name, messageText, fileUrl, base64Id, timestamp]
               );
             }
           }
@@ -187,6 +223,10 @@ if (platform === 'line' && body?.events?.length > 0) {
       return res.status(200).end();
     } catch (err) {
       if (db) {
+        await db.execute(
+          `INSERT INTO BOT_WEBHOOK_ERRORS (ERROR_MESSAGE, STACK_TRACE) VALUES (?, ?)`,
+          [err.message, err.stack]
+        );
         await db.end();
       }
       console.error('Webhook handler error:', err);
