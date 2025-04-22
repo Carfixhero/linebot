@@ -135,7 +135,10 @@ export default async function handler(req, res) {
       if (platform === 'facebook' && body?.entry?.length > 0) {
         for (const entry of body.entry) {
           for (const msg of entry.messaging || []) {
-            if (msg.message) {
+       if (msg.message) {
+  const direction = msg.message.is_echo ? 'out' : 'in';
+
+
               const userId = msg.sender.id;
               const messageId = msg.message.mid;
               const timestamp = new Date(msg.timestamp);
@@ -187,8 +190,9 @@ export default async function handler(req, res) {
               );
 
               await db.execute(
-                `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, 'in', ?, ?)`,
-                [bcId, messageId, timestamp]
+               `INSERT IGNORE INTO BOT_MESSAGES (BC_ID, DIRECTION, MESSAGE_ID, CREATED_TIME) VALUES (?, ?, ?, ?)`,
+[bcId, direction, messageId, timestamp]
+
               );
 
               const [[{ ID: bmId } = {}]] = await db.execute(
