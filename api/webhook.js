@@ -158,7 +158,12 @@ if (body?.entry?.length > 0) {
       messageText = msg.message.text;
     } else if (msg.message.attachments?.length > 0) {
       const attachment = msg.message.attachments[0];
-      messageText = `[${attachment.type} attachment]`;
+      if (attachment.type === 'image' && msg.message.sticker_id) {
+  messageText = `[sticker ID: ${msg.message.sticker_id}]`;
+} else {
+  messageText = `[${attachment.type} attachment]`;
+}
+
       fileUrl = attachment.payload?.url || null;
 
       if (fileUrl) {
