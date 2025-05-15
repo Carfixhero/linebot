@@ -6,8 +6,9 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
+  let db;
   try {
-    const db = await mysql.createConnection({
+    db = await mysql.createConnection({
       host: process.env.MYSQL_HOST,
       user: process.env.MYSQL_USER,
       password: process.env.MYSQL_PASSWORD,
@@ -19,6 +20,7 @@ export default async function handler(req, res) {
     );
 
     if (rows.length === 0) {
+      await db.end();
       return res.status(200).json({ message: 'Nothing to translate' });
     }
 
@@ -27,14 +29,15 @@ export default async function handler(req, res) {
 
     const isSkippable =
       clean === '' ||
-      /^\[.*\]$/.test(clean) ||      // e.g., [image attachment], [reaction: 👍]
-      /^[\d\s]+$/.test(clean);       // only numbers or spaces
+      /^\[.*\]$/.test(clean) ||
+      /^[\d\s]+$/.test(clean);
 
     if (isSkippable) {
       await db.execute(
         'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
         ['NA', ID]
       );
+      await db.end();
       return res.status(200).json({
         skipped: true,
         reason: 'Non-translatable content',
@@ -68,6 +71,7 @@ Only reply with the clean, natural translation — no explanation.`
         'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
         ['NA', ID]
       );
+      await db.end();
       return res.status(200).json({
         skipped: true,
         reason: 'OpenAI gave empty',
@@ -80,6 +84,7 @@ Only reply with the clean, natural translation — no explanation.`
       [translated, ID]
     );
 
+    await db.end();
     res.status(200).json({
       success: true,
       id: ID,
@@ -91,13 +96,14 @@ Only reply with the clean, natural translation — no explanation.`
     console.error('❌ Translation failed:', err);
     try {
       const idMatch = /ID\s*=\s*(\d+)/.exec(err.message || '')?.[1];
-      if (idMatch) {
+      if (idMatch && db) {
         await db.execute(
           'UPDATE BOT_MES_CONTENT SET TRANS_CONTENT = ? WHERE ID = ?',
           ['NA', idMatch]
         );
       }
     } catch (ignore) {}
+    if (db) await db.end();
     res.status(500).json({
       error: 'Translation failed',
       detail: err.message || 'Unknown error',
